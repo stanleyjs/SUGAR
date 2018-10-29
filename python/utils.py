@@ -14,6 +14,18 @@ def check_positive(**params):
             raise ValueError(
                 "Expected {} > 0, got {}".format(p, params[p]))
 
+def check_nonnegative(**params):
+    """Check that parameters are non-negative as expected
+    Raises
+    ------
+    ValueError : unacceptable choice of parameters
+    """
+    for p in params:
+        if not isinstance(params[p], numbers.Number) or params[p] < 0:
+            raise ValueError(
+                "Expected {} > 0, got {}".format(p, params[p]))
+
+
 
 def check_int(**params):
     """Check that parameters are integers as expected
