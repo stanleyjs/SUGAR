@@ -13,7 +13,7 @@ N_S=length(subset_r);
 sub_bunny=bunny(subset_r,:);
 
 
-[sugar_gen_points,~, d_hat, ~, ~, ~, ~, random_points] =sugar(sub_bunny,'equalize',1,'degree_a', 20);
+[sugar_gen_points,~, d_hat, ~, ~, noise, ~, random_points] =sugar(sub_bunny,'equalize',0,'degree_a', 20);
 figure
 
 scatter3(sub_bunny(:,3),sub_bunny(:,1),sub_bunny(:,2),20,d_hat,'filled');

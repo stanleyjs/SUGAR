@@ -55,7 +55,7 @@ function [Y, out_labels, d_hat, s_hat, sigma, noise, npts, random_points, mgc_ke
 %               Accepts:
 %                       positive scalars
 %       degree_fac         (default = 1)
-%               Rescale mgc kernel bandwidth
+%               Rescale degree kernel bandwidth
 %                   Accepts:
 %                       positive scalars
 %       M               (default = 0)

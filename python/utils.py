@@ -23,7 +23,7 @@ def check_nonnegative(**params):
     for p in params:
         if not isinstance(params[p], numbers.Number) or params[p] < 0:
             raise ValueError(
-                "Expected {} > 0, got {}".format(p, params[p]))
+                "Expected {} >= 0, got {}".format(p, params[p]))
 
 
 
@@ -76,7 +76,6 @@ def check_in(choices, **params):
                 "{} value {} not recognized. Choose from {}".format(
                     p, params[p], choices))
 
-
 def check_between(v_min, v_max, **params):
     """Checks parameters are in a specified range
     Parameters
@@ -93,7 +92,11 @@ def check_between(v_min, v_max, **params):
         if params[p] < v_min or params[p] > v_max:
             raise ValueError("Expected {} between {} and {}, "
                              "got {}".format(p, v_min, v_max, params[p]))
-
+def string_lower(x):
+    if isinstance(x,str):
+        return x.lower()
+    else:
+        return x
 
 def matrix_is_equivalent(X, Y):
     """

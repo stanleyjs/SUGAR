@@ -1,11 +1,11 @@
 function [K,sigma] = gauss_kernel(data1,data2, varargin)
-% DEGREES    compute degree and sparsity estimates of data   https://arxiv.org/abs/1802.04927
+% DEGREES    compute gaussian kernel of data   https://arxiv.org/abs/1802.04927
 %   Authors: Ofir Lindenbaum, Jay S. Stanely III.
 % 
 % Usage:
-%         K = degrees(data1, data2, varargin) Build a kernel over data1,
+%         K = gauss_kernel(data1, data2, varargin) Build a kernel over data1,
 %         data2
-%         [K,sigma] = degrees(data1, data2, varargin) Return kernel
+%         [K,sigma] = gauss_kernel(data1, data2, varargin) Return kernel
 %         bandwidth sigma
 %
 % Input: 
@@ -55,6 +55,7 @@ if strcmp(sigma,'minmax')
     MinDv=min(D+eye(size(D))*10^15);
     eps_val=(max(MinDv));
     sigma=2*(eps_val)^2;
+    disp('minmax')
 elseif strcmp(sigma,'median')
     sigma=median(median(D));
 elseif strcmp(sigma, 'std')

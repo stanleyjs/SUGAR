@@ -50,7 +50,7 @@ N=size(data,2);
 
 %construct kernel
 [K,sigma] = gauss_kernel(data,data, 'sigma', sigma, 'a', a, 'k', k, 'fac', fac);
-p = sum(K);
+p = sum(K,1);
 
 % Compute ouputs
 d_hat=p*(N)/sum(p);
