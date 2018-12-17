@@ -23,6 +23,10 @@ from utils import *
 
 tasklogger.get_tasklogger().min_runtime = -1
 
+def log_start(message):
+    tasklogger.log_start(message, logger="SUGAR")
+def log_complete(message):
+    tasklogger.log_complete(message, logger="SUGAR")
 
 class SUGAR(BaseEstimator):
     """SUGAR operator which performs data generation on input.
@@ -224,7 +228,7 @@ class SUGAR(BaseEstimator):
             warnings.warn("verbose expected bool, got {}. "
                           "Casting to boolean. ".format(type(self.verbose)))
         self.verbose = int(bool(self.verbose))
-        tasklogger.set_level(self.verbose)
+        tasklogger.set_level(self.verbose, logger="SUGAR")
 
         if not isinstance(self.low_memory, bool) and \
            self.low_memory not in [0, 1]:
@@ -256,8 +260,7 @@ class SUGAR(BaseEstimator):
     @property
     def covs(self):
         if self._covs is None:
-            tasklogger.log_start("covariance estimation")
-            tasklogger.log_info("Computing covariance tensor...")
+            log_start("covariance estimation")
             self._covs = []
             if self.noise_cov is None:
                 noise_nbrs = np.argpartition(
@@ -279,6 +282,7 @@ class SUGAR(BaseEstimator):
                         noise_nbrs[key] = value
             for ix in range(0, self._N):
                 self._covs.append(np.cov(self.X[noise_nbrs[ix], :].T))
+            log_complete("covariance estimation")
         else:
             pass
         return self._covs
@@ -286,16 +290,16 @@ class SUGAR(BaseEstimator):
     @property
     def Xdists(self):
         if self._Xdists is None:
-            tasklogger.log_start("distance matrix")
+            log_start("distance matrix")
             self._Xdists = squareform(pdist(self.X,
                                             metric=self.distance_metric))
-            tasklogger.log_complete("distance matrix")
+            log_complete("distance matrix")
         return self._Xdists
 
     @property
     def Xg(self):
         if self._Xg is None:
-            tasklogger.log_start("sparsity kernel")
+            log_start("sparsity kernel")
             if self.sparsity_idx is not None:
                 self._Xg = gt.Graph(self.X[:, self.sparsity_idx],
                                     bandwidth=self.degree_sigma,
@@ -307,12 +311,12 @@ class SUGAR(BaseEstimator):
                                     knn=self.degree_k, decay=self.degree_a,
                                     bandwidth_fac=self.degree_fac,
                                     precomputed='distance')
-            tasklogger.log_complete("sparsity kernel")
+            log_complete("sparsity kernel")
 
         return self._Xg
 
     def compute_sparsity(self, X=None, sparsity_idx=None):
-        tasklogger.log_start("sparsity estimate")
+        log_start("sparsity estimate")
 
         if X is not None:
             if sparsity_idx is not None:
@@ -330,7 +334,7 @@ class SUGAR(BaseEstimator):
             if self.low_memory:
                 del self._Xg
                 self._Xg = None
-        tasklogger.log_complete("sparsity estimate")
+        log_complete("sparsity estimate")
         return s
 
     def estimate_generation(self, precomputed=False):
@@ -341,9 +345,9 @@ class SUGAR(BaseEstimator):
         np.array(shape=(n_samples,))
             Estimated amount of points to generate around each original point.
         """
-        tasklogger.log_start("generation estimate")
+        log_start("generation estimate")
         self.sparsity_estimate = self.compute_sparsity()
-        tasklogger.log_complete("generation estimate")
+        log_complete("generation estimate")
         return self._gen_est
 
     @property
