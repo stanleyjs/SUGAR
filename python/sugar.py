@@ -21,6 +21,8 @@ import warnings
 import tasklogger
 from utils import *
 
+tasklogger.get_tasklogger().min_runtime = -1
+
 
 class SUGAR(BaseEstimator):
     """SUGAR operator which performs data generation on input.
@@ -116,7 +118,7 @@ class SUGAR(BaseEstimator):
             indexing of input columns
         if shape = [n_keep,], elements must be unique nonnegative integers
             strictly less than n_dim
-    sparsity : array-like , shape = [n_samples,]
+    sparsity_estimate : array-like , shape = [n_samples,]
         Sparsity estimate on the data
     X_labels : array-like, shape = [n_samples,], default = None
         Classifier labels to generate data.
@@ -162,25 +164,24 @@ class SUGAR(BaseEstimator):
         self._reset_model()
         self._check_params()
         self._convert_sigmas()
-        
+
     def _reset_model(self):
-        self.X = None
+        self._X = None
         self._N = None
         self._Xdists = None
         self._Xg = None
         self._gen_est = None
         self._covs = None
-        self.Y = None
-        self.Y_random = None
+        self._Y = None
+        self._Y_random = None
         self.sparsity_idx = None
-        self.sparsity = None
+        self.sparsity_estimate = None
         self.X_labels = None
         self.Y_labels = None
         self.deg_kernel = None
         self.mgc_kernel = None
         self._Xdists = None
         self._covs = None
-        self.sparsity = None
 
     def _check_params(self):
         check_positive(noise_k=self.noise_k, degree_k=self.degree_k,
@@ -247,59 +248,93 @@ class SUGAR(BaseEstimator):
             self.mgc_sigma = func_dict[self.mgc_sigma]
 
     @property
+    def N(self):
+        if self._N is None:
+            self._N = self.X.shape[0]
+        return self._N
+
+    @property
     def covs(self):
-        if self.X is not None:
-            if self._covs is None:
-                tasklogger.log_start("covariance estimation")
-                tasklogger.log_info("Computing covariance tensor...")
-                self._covs = np.ndarray(
-                    shape=(self._N, self.X.shape[1], self.X.shape[1]))
-                if self.noise_cov is None:
-                    noise_nbrs = np.argpartition(
-                        self._Xdists,
-                        self.noise_k + 1, axis=1)[
-                        :, :self.noise_k]
-                    noise_nbrs = {i: p for i, p in enumerate(noise_nbrs)}
-                else:
-                    if callable(self.noise_cov):
-                        noise_bw = self.noise_cov(self._Xdists)
-                    else:
-                        noise_bw = self.noise_cov
-                    print(noise_nbrs)
-                    noise_tmp = np.where(self._Xdists <= noise_bw)
-                    noise_nbrs = {}
-                    for key, value in zip(*noise_tmp):
-                        if key in noise_nbrs:
-                            noise_nbrs[key] = np.append(noise_nbrs[key], value)
-                        else:
-                            noise_nbrs[key] = value
-                for ix in range(0, self._N):
-                    self._covs[ix, :, :] = np.cov(self.X[noise_nbrs[ix], :].T)
+        if self._covs is None:
+            tasklogger.log_start("covariance estimation")
+            tasklogger.log_info("Computing covariance tensor...")
+            self._covs = []
+            if self.noise_cov is None:
+                noise_nbrs = np.argpartition(
+                    self.Xdists,
+                    self.noise_k + 1, axis=1)[
+                    :, :self.noise_k]
+                noise_nbrs = {i: p for i, p in enumerate(noise_nbrs)}
             else:
-                pass
-            return self._covs
+                if callable(self.noise_cov):
+                    noise_bw = self.noise_cov(self.Xdists)
+                else:
+                    noise_bw = self.noise_cov
+                noise_tmp = np.where(self.Xdists <= noise_bw)
+                noise_nbrs = {}
+                for key, value in zip(*noise_tmp):
+                    if key in noise_nbrs:
+                        noise_nbrs[key] = np.append(noise_nbrs[key], value)
+                    else:
+                        noise_nbrs[key] = value
+            for ix in range(0, self._N):
+                self._covs.append(np.cov(self.X[noise_nbrs[ix], :].T))
         else:
-            raise NotFittedError("This SUGAR instance is not fitted yet. Call "
-                                 "'fit' with appropriate arguments before "
-                                 "using this method.")
+            pass
+        return self._covs
 
     @property
     def Xdists(self):
         if self._Xdists is None:
-            if self.X is not None:
-                tasklogger.log_start("distance computations")
-                tasklogger.log_info("Computing distance matrix...")
-                self._Xdists = squareform(pdist(self.X,
-                                                metric=self.distance_metric))
-                tasklogger.log_complete("distance computation")
-            else:
-                raise NotFittedError("This SUGAR instance is not fitted yet. "
-                                     "Call `fit` with appropriate arguments "
-                                     "before using this method.")
+            tasklogger.log_start("distance matrix")
+            self._Xdists = squareform(pdist(self.X,
+                                            metric=self.distance_metric))
+            tasklogger.log_complete("distance matrix")
         return self._Xdists
 
-    def _numgen(self, precomputed=False):
-        """_numgen: compute the amount of points to generate for every x_i.
+    @property
+    def Xg(self):
+        if self._Xg is None:
+            tasklogger.log_start("sparsity kernel")
+            if self.sparsity_idx is not None:
+                self._Xg = gt.Graph(self.X[:, self.sparsity_idx],
+                                    bandwidth=self.degree_sigma,
+                                    bandwidth_fac=self.degree_fac,
+                                    decay=self.degree_a,
+                                    knn=self.degree_k)
+            else:
+                self._Xg = gt.Graph(self.Xdists, bandwidth=self.degree_sigma,
+                                    knn=self.degree_k, decay=self.degree_a,
+                                    bandwidth_fac=self.degree_fac,
+                                    precomputed='distance')
+            tasklogger.log_complete("sparsity kernel")
+
+        return self._Xg
+
+    def compute_sparsity(self, X=None, sparsity_idx=None):
+        tasklogger.log_start("sparsity estimate")
+
+        if X is not None:
+            if sparsity_idx is not None:
+                X = X[:, sparsity_idx]
+
+            g = gt.Graph(X,
+                         bandwidth=self.degree_sigma,
+                         bandwidth_fac=self.degree_fac,
+                         decay=self.degree_a,
+                         knn=self.degree_k)
+            s = 1 / g.K.sum(axis=1)
+            del g
+        else:
+            s = 1 / self.Xg.K.sum(axis=1)
+            if self.low_memory:
+                del self._Xg
+                self._Xg = None
+        tasklogger.log_complete("sparsity estimate")
+        return s
+
+    def estimate_generation(self, precomputed=False):
+        """estimate_generation: compute the amount of points to generate for every x_i.
 
         Returns
         -------
@@ -307,20 +342,45 @@ class SUGAR(BaseEstimator):
             Estimated amount of points to generate around each original point.
         """
         tasklogger.log_start("generation estimate")
-        if (self.sparsity_idx is None) or (precomputed):
-            self._Xg = gt.Graph(self.Xdists, bandwidth=self.degree_sigma,
-                                knn=self.degree_k, decay=self.degree_a,
-                                precomputed='distance')
-        else:
-            self._Xg = gt.Graph(self.X[:, self.sparsity_idx],
-                                bandwidth=self.degree_sigma,
-                                decay=self.degree_a,
-                                knn=self.degree_k)
-        self.sparsity = 1 / self._Xg.K.sum(axis=1)
-        raise NotImplementedError("Need to put estimate from paper here")
-        tasklogger.stop("generation estimate")
-        return
+        self.sparsity_estimate = self.compute_sparsity()
+        tasklogger.log_complete("generation estimate")
+        return self._gen_est
 
+    @property
+    def X(self):
+        if self._X is None:
+            raise NotFittedError("This SUGAR instance is not fitted yet. "
+                                 "Call `fit` with appropriate arguments "
+                                 "before using this method.")
+        else:
+            return self._X
+
+    @property
+    def gen_est(self):
+        if self._gen_est is None:
+            self.estimate_generation()
+        return self._gen_est
+
+    @property
+    def Y_random(self):
+        if self._Y_random is None:
+            self.gen_pts()
+        return self._Y_random
+
+    def gen_pts(self, X=None, gen_est=None):
+        if X is None:
+            X = self.X
+        if gen_est is None:
+            gen_est = self.gen_est
+        self._Y_random = np.ndarray((np.sum(gen_est), X.shape[1]))
+        cur_idx = 0
+        for ix, ell in enumerate(gen_est):
+            self._Y_random[cur_idx:cur_idx + ell, :] = \
+                np.random.multivariate_normal(self.X[ix, :],
+                                              self.covs[ix],
+                                              ell)
+            cur_idx += ell
+        return self.Y_random
 
     def fit(self, X, sparsity_idx=None, precomputed=None, refit=True):
         """Fit the SUGAR estimator to the data
@@ -334,7 +394,7 @@ class SUGAR(BaseEstimator):
             If None estimate sparsity from complete input column set
             If shape = [n_dims,] `sparsity_idx` will be cast to boolean
                 for logical indexing of input columns
-            if shape = [n_keep,], elements must be unique nonnegative integers
+            If shape = [n_keep,], elements must be unique nonnegative integers
                 strictly less than n_dim
         precomputed : None, optional
             Precomputed distance matrix to compute degree 
@@ -342,14 +402,16 @@ class SUGAR(BaseEstimator):
         """
         if refit:
             self._reset_model()
-        self.X = X
-        self._N = X.shape[0]
+        self._X = X
 
         self.sparsity_idx = sparsity_idx
         if self.distance_metric in ['precomputed',
                                     'precomputed_distance'] \
            and precomputed is not None:
             self._Xdists = precomputed
-            precomputed = True
+            if self.sparsity_idx is not None:
+                warnings.warn("Precomputed distance matrix overrides"
+                              "sparsity_idx.")
+            self.sparsity_idx = None
 
-        self._numgen(precomputed=precomputed)
+        self.estimate_generation()
