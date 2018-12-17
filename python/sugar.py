@@ -24,8 +24,11 @@ from utils import *
 
 def log_start(message):
     tasklogger.log_start(message, logger="SUGAR")
+
+
 def log_complete(message):
     tasklogger.log_complete(message, logger="SUGAR")
+
 
 class SUGAR(BaseEstimator):
     """SUGAR operator which performs data generation on input.
@@ -112,7 +115,7 @@ class SUGAR(BaseEstimator):
         None if `low_memory`.
         Random points before applying MGC.  If mgc_magic = 0, then
         Y_random = Y.
-    gen_est : distibution of points generated around each original point.
+    generation_estimate : distibution of points generated around each original point.
     sparsity_idx : array-like, shape = [n_components,] or [n_keep,],
                     default=None
         Column indices of input dimensions to estimate sparsity.
@@ -359,7 +362,7 @@ class SUGAR(BaseEstimator):
             return self._X
 
     @property
-    def gen_est(self):
+    def generation_estimate(self):
         if self._gen_est is None:
             self.estimate_generation()
         return self._gen_est
@@ -367,14 +370,14 @@ class SUGAR(BaseEstimator):
     @property
     def Y_random(self):
         if self._Y_random is None:
-            self.gen_pts()
+            self.generate_points()
         return self._Y_random
 
-    def gen_pts(self, X=None, gen_est=None):
+    def generate_points(self, X=None, gen_est=None):
         if X is None:
             X = self.X
         if gen_est is None:
-            gen_est = self.gen_est
+            gen_est = self.generation_estimate
         self._Y_random = np.ndarray((np.sum(gen_est), X.shape[1]))
         cur_idx = 0
         for ix, ell in enumerate(gen_est):
