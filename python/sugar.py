@@ -21,7 +21,6 @@ import warnings
 import tasklogger
 from utils import *
 
-tasklogger.get_tasklogger().min_runtime = -1
 
 def log_start(message):
     tasklogger.log_start(message, logger="SUGAR")
@@ -228,8 +227,8 @@ class SUGAR(BaseEstimator):
             warnings.warn("verbose expected bool, got {}. "
                           "Casting to boolean. ".format(type(self.verbose)))
         self.verbose = int(bool(self.verbose))
-        tasklogger.set_level(self.verbose, logger="SUGAR")
-
+        logger = tasklogger.set_level(self.verbose, logger="SUGAR")
+        logger.min_runtime = -1
         if not isinstance(self.low_memory, bool) and \
            self.low_memory not in [0, 1]:
             warnings.warn("verbose expected bool, got {}. "
