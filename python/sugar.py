@@ -64,7 +64,7 @@ class SUGAR(BaseEstimator):
     degree_a : positive float, optional, default = 2
         Alpha-kernel decay parameter for degree computation.
         2 is Gaussian kernel.
-    degree_fac : positive float, optional, default = 1
+    degree_scale : positive float, optional, default = 1
         Rescale degree kernel bandwidth
     M : non-negative int, optional, default = 0
         Number of points to generate.  Can affect strength of density
@@ -91,7 +91,7 @@ class SUGAR(BaseEstimator):
         Only applicable when `mgc_sigma = 'knn'`.
     mgc_a : positive float, optional, default = 2
         Alpha-kernel decay parameter for MGC kernel. 2 is Gaussian kernel.
-    mgc_fac : positive float, optional, default = 1
+    mgc_scale : positive float, optional, default = 1
         Rescale mgc kernel bandwidth
     magic_rescale : bool, optional, default = True
         Percentile-rescale new points after final diffusion.
@@ -144,9 +144,9 @@ class SUGAR(BaseEstimator):
 
     def __init__(self, noise_cov=None, noise_k=5,
                  degree_sigma='std', degree_k=5,
-                 degree_a=2, degree_fac=1, M=False, equalize=False,
+                 degree_a=2, degree_scale=1, M=False, equalize=False,
                  mgc_magic=1, mgc_sigma=None, mgc_a=2, mgc_k=5,
-                 mgc_fac=1, magic_rescale=1, distance_metric='euclidean',
+                 mgc_scale=1, magic_rescale=1, distance_metric='euclidean',
                  verbose=True, low_memory=False):
         # set parameters
         self.noise_cov = string_lower(noise_cov)
@@ -154,14 +154,14 @@ class SUGAR(BaseEstimator):
         self.degree_sigma = string_lower(degree_sigma)
         self.degree_k = degree_k
         self.degree_a = degree_a
-        self.degree_fac = degree_fac
+        self.degree_scale = degree_scale
         self.M = M
         self.equalize = equalize
         self.mgc_magic = mgc_magic
         self.mgc_sigma = string_lower(mgc_sigma)
         self.mgc_k = mgc_k
         self.mgc_a = mgc_a
-        self.mgc_fac = mgc_fac
+        self.mgc_scale = mgc_scale
         self.magic_rescale = magic_rescale
         self.distance_metric = distance_metric
         self.verbose = verbose
@@ -191,9 +191,9 @@ class SUGAR(BaseEstimator):
 
     def _check_params(self):
         check_positive(noise_k=self.noise_k, degree_k=self.degree_k,
-                       degree_a=self.degree_a, degree_fac=self.degree_fac,
+                       degree_a=self.degree_a, degree_scale=self.degree_scale,
                        mgc_k=self.mgc_k, mgc_a=self.mgc_a,
-                       mgc_fac=self.mgc_fac)
+                       mgc_scale=self.mgc_scale)
         check_int(noise_k=self.noise_k, degree_k=self.degree_k,
                   mgc_k=self.mgc_k, M=self.M)
         check_nonnegative(M=self.M, mgc_magic=self.mgc_magic)
@@ -305,13 +305,13 @@ class SUGAR(BaseEstimator):
             if self.sparsity_idx is not None:
                 self._Xg = gt.Graph(self.X[:, self.sparsity_idx],
                                     bandwidth=self.degree_sigma,
-                                    bandwidth_fac=self.degree_fac,
+                                    bandwidth_scale=self.degree_scale,
                                     decay=self.degree_a,
                                     knn=self.degree_k)
             else:
                 self._Xg = gt.Graph(self.Xdists, bandwidth=self.degree_sigma,
                                     knn=self.degree_k, decay=self.degree_a,
-                                    bandwidth_fac=self.degree_fac,
+                                    bandwidth_scale=self.degree_scale,
                                     precomputed='distance')
             log_complete("sparsity kernel")
 
@@ -326,7 +326,7 @@ class SUGAR(BaseEstimator):
 
             g = gt.Graph(X,
                          bandwidth=self.degree_sigma,
-                         bandwidth_fac=self.degree_fac,
+                         bandwidth_scale=self.degree_scale,
                          decay=self.degree_a,
                          knn=self.degree_k)
             s = 1 / g.K.sum(axis=1)
@@ -386,6 +386,9 @@ class SUGAR(BaseEstimator):
                                               self.covs[ix],
                                               ell)
             cur_idx += ell
+        if self.low_memory:
+            del self._covs
+            self._covs = None
         return self.Y_random
 
     def fit(self, X, sparsity_idx=None, precomputed=None, refit=True):
@@ -403,7 +406,7 @@ class SUGAR(BaseEstimator):
             If shape = [n_keep,], elements must be unique nonnegative integers
                 strictly less than n_dim
         precomputed : None, optional
-            Precomputed distance matrix to compute degree 
+            Precomputed distance matrix to compute degree
             and covariance estimates.
         """
         if refit:
