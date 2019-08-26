@@ -14,7 +14,7 @@ import functools
 from sklearn.base import BaseEstimator
 from sklearn.exceptions import NotFittedError
 from scipy import sparse
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist, squareform,cdist
 from sklearn.neighbors import NearestNeighbors
 
 import warnings
@@ -89,7 +89,7 @@ class SUGAR(BaseEstimator):
     mgc_k : positive int, optional, default = 5
         Neighborhood size for adaptive bandwidth MGC kernel.
         Only applicable when `mgc_sigma = 'knn'`.
-    mgc_a : positive float, optional, default = 2
+    mgc_decay : positive float, optional, default = 2
         Alpha-kernel decay parameter for MGC kernel. 2 is Gaussian kernel.
     mgc_scale : positive float, optional, default = 1
         Rescale mgc kernel bandwidth
@@ -144,8 +144,8 @@ class SUGAR(BaseEstimator):
 
     def __init__(self, noise_cov=None, noise_k=5,
                  degree_sigma='std', degree_k=5,
-                 degree_a=2, degree_scale=1, M=False, equalize=False,
-                 mgc_magic=1, mgc_sigma=None, mgc_a=2, mgc_k=5,
+                 degree_a=2, degree_scale=1, M=None, equalize=False,
+                 mgc_magic=1, mgc_sigma=None, mgc_decay=2, mgc_k=5,
                  mgc_scale=1, magic_rescale=1, distance_metric='euclidean',
                  verbose=True, low_memory=False):
         # set parameters
@@ -160,7 +160,7 @@ class SUGAR(BaseEstimator):
         self.mgc_magic = mgc_magic
         self.mgc_sigma = string_lower(mgc_sigma)
         self.mgc_k = mgc_k
-        self.mgc_a = mgc_a
+        self.mgc_decay = mgc_decay
         self.mgc_scale = mgc_scale
         self.magic_rescale = magic_rescale
         self.distance_metric = distance_metric
@@ -181,18 +181,20 @@ class SUGAR(BaseEstimator):
         self._Y = None
         self._Y_random = None
         self.sparsity_idx = None
-        self.sparsity_estimate = None
+        self._sparsity_estimate = None
         self.X_labels = None
         self.Y_labels = None
-        self.deg_kernel = None
-        self.mgc_kernel = None
+        self._deg_kernel = None
+        self._mgc_kernel = None
+        self._degree_bandwidth = None
         self._Xdists = None
         self._covs = None
+        self.__isfit = False
 
     def _check_params(self):
         check_positive(noise_k=self.noise_k, degree_k=self.degree_k,
                        degree_a=self.degree_a, degree_scale=self.degree_scale,
-                       mgc_k=self.mgc_k, mgc_a=self.mgc_a,
+                       mgc_k=self.mgc_k, mgc_decay=self.mgc_decay,
                        mgc_scale=self.mgc_scale)
         check_int(noise_k=self.noise_k, degree_k=self.degree_k,
                   mgc_k=self.mgc_k, M=self.M)
@@ -254,6 +256,15 @@ class SUGAR(BaseEstimator):
             self.mgc_sigma = func_dict[self.mgc_sigma]
 
     @property
+    def X(self):
+        if self._X is None:
+            raise NotFittedError("This SUGAR instance is not fitted yet. "
+                                 "Call `fit` with appropriate arguments "
+                                 "before using this method.")
+        else:
+            return self._X
+
+    @property
     def N(self):
         if self._N is None:
             self._N = self.X.shape[0]
@@ -262,29 +273,7 @@ class SUGAR(BaseEstimator):
     @property
     def covs(self):
         if self._covs is None:
-            log_start("covariance estimation")
-            self._covs = []
-            if self.noise_cov is None:
-                noise_nbrs = np.argpartition(
-                    self.Xdists,
-                    self.noise_k + 1, axis=1)[
-                    :, :self.noise_k]
-                noise_nbrs = {i: p for i, p in enumerate(noise_nbrs)}
-            else:
-                if callable(self.noise_cov):
-                    noise_bw = self.noise_cov(self.Xdists)
-                else:
-                    noise_bw = self.noise_cov
-                noise_tmp = np.where(self.Xdists <= noise_bw)
-                noise_nbrs = {}
-                for key, value in zip(*noise_tmp):
-                    if key in noise_nbrs:
-                        noise_nbrs[key] = np.append(noise_nbrs[key], value)
-                    else:
-                        noise_nbrs[key] = value
-            for ix in range(0, self._N):
-                self._covs.append(np.cov(self.X[noise_nbrs[ix], :].T))
-            log_complete("covariance estimation")
+            self._covs = self.estimate_covariance()
         else:
             pass
         return self._covs
@@ -293,7 +282,11 @@ class SUGAR(BaseEstimator):
     def Xdists(self):
         if self._Xdists is None:
             log_start("distance matrix")
-            self._Xdists = squareform(pdist(self.X,
+            if self.sparsity_idx is not None:
+                tmpX = self.X[:,sparsity_idx]
+            else:
+                tmpX = self.X
+            self._Xdists = squareform(pdist(tmpX,
                                             metric=self.distance_metric))
             log_complete("distance matrix")
         return self._Xdists
@@ -302,24 +295,97 @@ class SUGAR(BaseEstimator):
     def Xg(self):
         if self._Xg is None:
             log_start("sparsity kernel")
-            if self.sparsity_idx is not None:
-                self._Xg = gt.Graph(self.X[:, self.sparsity_idx],
-                                    bandwidth=self.degree_sigma,
-                                    bandwidth_scale=self.degree_scale,
-                                    decay=self.degree_a,
-                                    knn=self.degree_k)
-            else:
-                self._Xg = gt.Graph(self.Xdists, bandwidth=self.degree_sigma,
-                                    knn=self.degree_k, decay=self.degree_a,
-                                    bandwidth_scale=self.degree_scale,
-                                    precomputed='distance')
+            self._Xg = gt.Graph(self.Xdists, bandwidth=self.degree_sigma,
+                                knn=self.degree_k, decay=self.degree_a,
+                                bandwidth_scale=self.degree_scale,
+                                precomputed='distance')
             log_complete("sparsity kernel")
 
         return self._Xg
 
+    @property
+    def sparsity_estimate(self):
+        if self._sparsity_estimate is None:
+            self._sparsity_estimate = self.compute_sparsity()
+        return self._sparsity_estimate
+
+    @property
+    def generation_estimate(self):
+        if self._gen_est is None:
+            self._gen_est = self.estimate_generation()
+        return self._gen_est
+
+    @property
+    def Y_random(self):
+        if self._Y_random is None:
+            self._Y_random = self.generate_points()
+        return self._Y_random
+
+    @property
+    def mgc_kernel(self):
+        if self._mgc_kernel is None:
+            self._mgc_kernel = self.construct_MGC()
+        return self._mgc_kernel
+    @property
+    def Y(self):
+        return self._Y
+    @property
+    def degree_bandwidth(self):
+        if self._degree_bandwidth is None:
+            if self.degree_sigma is None:
+                degree_nbrs = np.argpartition(
+                self.Xdists,
+                self.degree_k + 1, axis=1)[
+                :, :self.degree_k]
+                self._degree_bandwidth = self.Xdists[:,degree_nbrs[:-1]].squeeze()
+            elif isinstance(self.degree_sigma,numbers.Number):
+                self._degree_bandwidth = self.degree_sigma
+            else:
+                self._degree_bandwidth = self.degree_sigma(self.Xdists)
+        return self._degree_bandwidth
+    def get_combined_data(self):
+        return np.vstack((self.X,self.Y))
+    def estimate_covariance(self,noise_cov=None,noise_k=None):
+        log_start("covariance estimation")
+
+        if noise_cov is None:
+            noise_cov = self.noise_cov
+        else:
+            self.noise_cov = noise_cov
+            self._convert_sigmas()
+
+        if noise_k is None:
+            noise_k = self.noise_k
+        else:
+            self.noise_k = noise_k
+            self._check_params()
+
+        covs = []
+        if noise_cov is None:
+            noise_nbrs = np.argpartition(
+                self.Xdists,
+                noise_k + 1, axis=1)[
+                :, :noise_k]
+            noise_nbrs = {i: p for i, p in enumerate(noise_nbrs)}
+        else:
+            if callable(noise_cov):
+                noise_bw = noise_cov(self.Xdists)
+            else:
+                noise_bw = noise_cov
+            noise_tmp = np.where(self.Xdists <= noise_bw)
+            noise_nbrs = {}
+            for key, value in zip(*noise_tmp):
+                if key in noise_nbrs:
+                    noise_nbrs[key] = np.append(noise_nbrs[key], value)
+                else:
+                    noise_nbrs[key] = value
+        for ix in range(0, self.N):
+            covs.append(np.cov(self.X[noise_nbrs[ix], :].T))
+        log_complete("covariance estimation")
+        return covs
+
     def compute_sparsity(self, X=None, sparsity_idx=None):
         log_start("sparsity estimate")
-
         if X is not None:
             if sparsity_idx is not None:
                 X = X[:, sparsity_idx]
@@ -333,13 +399,10 @@ class SUGAR(BaseEstimator):
             del g
         else:
             s = 1 / self.Xg.K.sum(axis=1)
-            if self.low_memory:
-                del self._Xg
-                self._Xg = None
         log_complete("sparsity estimate")
         return s
 
-    def estimate_generation(self, precomputed=False):
+    def estimate_generation(self, precomputed=False, equalize=None, M = None):
         """estimate_generation: compute the amount of points to generate for every x_i.
 
         Returns
@@ -348,49 +411,139 @@ class SUGAR(BaseEstimator):
             Estimated amount of points to generate around each original point.
         """
         log_start("generation estimate")
-        self.sparsity_estimate = self.compute_sparsity()
-        log_complete("generation estimate")
-        return self._gen_est
-
-    @property
-    def X(self):
-        if self._X is None:
-            raise NotFittedError("This SUGAR instance is not fitted yet. "
-                                 "Call `fit` with appropriate arguments "
-                                 "before using this method.")
+        if equalize is None:
+            equalize = self.equalize
         else:
-            return self._X
+            self.equalize = equalize
+        if M is None:
+            M = self.M
+        else:
+            self.M = M
+        self._check_params()
 
-    @property
-    def generation_estimate(self):
-        if self._gen_est is None:
-            self.estimate_generation()
-        return self._gen_est
+        d = 1/self.sparsity_estimate
+        max_d = np.max(d)
 
-    @property
-    def Y_random(self):
-        if self._Y_random is None:
-            self.generate_points()
-        return self._Y_random
+        gen_est = np.ones(self.N)
+        if equalize:
+            variance = self.degree_bandwidth**2
+            I = np.eye(self.X.shape[1])
+            for ix,covariance in enumerate(self.covs):
+                det_mat = I + covariance/(2*variance)
+                det_mat = np.sqrt(np.linalg.det(det_mat))
+                lower = det_mat*((max_d-d[ix])/(d[ix]+1)) -1
+                upper = det_mat * (max_d -d[ix])
+                gen_est[ix] = (lower+upper)//2
+        else:
+            ell=max_d-d
+            ell_n=(self.N/(np.sum(ell)+1e-17))*ell
+            ell_f=np.floor(ell_n)
+            gen_est=ell_f
+
+        gen_est_rescale = gen_est
+        if M is not None:
+            gen_est_rescale = gen_est*M/(sum(gen_est)+1e-17)
+            gen_est_rescale = np.round(gen_est_rescale)
+        log_complete("generation estimate")
+        return np.round(gen_est_rescale).astype(int)
 
     def generate_points(self, X=None, gen_est=None):
         if X is None:
             X = self.X
         if gen_est is None:
             gen_est = self.generation_estimate
-        self._Y_random = np.ndarray((np.sum(gen_est), X.shape[1]))
+        Y_random = np.ndarray((np.sum(gen_est), X.shape[1]))
         cur_idx = 0
         for ix, ell in enumerate(gen_est):
-            self._Y_random[cur_idx:cur_idx + ell, :] = \
+            Y_random[cur_idx:cur_idx + ell, :] = \
                 np.random.multivariate_normal(self.X[ix, :],
                                               self.covs[ix],
                                               ell)
             cur_idx += ell
-        if self.low_memory:
-            del self._covs
-            self._covs = None
-        return self.Y_random
+        return Y_random
 
+    def construct_mgc(self, X=None, Y=None,sparsity=None,mgc_sigma=None, mgc_k=None,mgc_decay=None, mgc_scale=None):
+        if sparsity is None:
+            sparsity = self.sparsity_estimate
+        if X is None:
+            X = self.X
+        assert(sparsity.shape[0] in X.shape)
+        if X.shape[1] == sparsity.shape[0]:
+            X = X.T
+        if Y is None:
+            Y = self.Y_random
+
+        if mgc_sigma is not None:
+            self.mgc_sigma = string_lower(mgc_sigma)
+            self._convert_sigmas()
+        if mgc_k is not None:
+            self.mgc_k = mgc_k
+        if mgc_decay is not None:
+            self.mgc_decay = mgc_decay
+        if mgc_scale is not None:
+            self.mgc_scale = mgc_scale
+        self._check_params()
+        mgc_sigma = self.mgc_sigma
+        mgc_k = self.mgc_k
+        mgc_decay = self.mgc_decay
+        mgc_scale = self.mgc_scale
+
+        X_Y_dists = (cdist(X,Y,metric=self.distance_metric))
+        Y_X_dists = (cdist(Y,X,metric=self.distance_metric))
+        if mgc_sigma is None:
+            X_Y_mgc_bw = np.argpartition(
+                X_Y_dists,
+                mgc_k + 1, axis=1)[
+                :, :mgc_k]
+            X_Y_mgc_bw = X_Y_mgc_bw[:,-1]
+            X_Y_mgc_bw = X_Y_dists[np.arange(X.shape[0]),X_Y_mgc_bw].squeeze()
+
+            Y_X_mgc_bw = np.argpartition(Y_X_dists, mgc_k+1,axis=1)[:,:mgc_k]
+
+            Y_X_mgc_bw = Y_X_mgc_bw[:,-1].squeeze()
+
+            Y_X_mgc_bw = Y_X_dists[np.arange(Y.shape[0]),Y_X_mgc_bw]
+
+        elif isinstance(mgc_sigma,numbers.Number):
+            Y_X_mgc_bw = mgc_sigma
+            X_Y_mgc_bw = mgc_sigma
+        else:
+            X_Y_mgc_bw = mgc_sigma(X_Y_dists)
+            Y_X_mgc_bw = mgc_sigma(Y_X_dists)
+
+        X_Y_mgc_bw = X_Y_mgc_bw*mgc_scale
+        Y_X_mgc_bw = Y_X_mgc_bw*mgc_scale
+        X_Y_pdx = (X_Y_dists.T/X_Y_mgc_bw).T
+        Y_X_pdx = (Y_X_dists.T/Y_X_mgc_bw).T
+
+        X_Y_kernel = np.exp(-1*np.power(X_Y_pdx,mgc_decay))
+        Y_X_kernel = np.exp(-1*np.power(Y_X_pdx,mgc_decay))
+
+        Y_X_rescale = Y_X_kernel*sparsity
+        mgc_kernel = Y_X_rescale@X_Y_kernel
+        mgc_kernel = (mgc_kernel+mgc_kernel.T)/2
+        return mgc_kernel
+
+    def apply_mgc(self, Y=None,kernel = None, t = None,rescale = None):
+
+        if kernel is None:
+            kernel = self.mgc_kernel
+        if t is None:
+            t = self.mgc_magic
+        if Y is None:
+            Y = self.Y_random
+        if rescale is None:
+            rescale = self.magic_rescale
+
+        diffusion_degrees = np.diag(1./np.sum(kernel,1));
+        diffusion_operator = diffusion_degrees@kernel;
+        for _ in range(t):
+            Y = diffusion_operator@Y
+            print('magic')
+        if rescale:
+                Y = (Y) * (np.percentile(self.X,95)/np.percentile(Y,95));
+
+        return Y
     def fit(self, X, sparsity_idx=None, precomputed=None, refit=True):
         """Fit the SUGAR estimator to the data
 
@@ -423,4 +576,27 @@ class SUGAR(BaseEstimator):
                               "sparsity_idx.")
             self.sparsity_idx = None
 
-        self.estimate_generation()
+        self._gen_est = self.estimate_generation(equalize = self.equalize)
+        self.__isfit = True
+        return self
+
+    def transform(self, mgc_magic=1):
+        if not self.__isfit:
+            raise(NotFittedError)
+        else:
+            self._Y_random = self.generate_points(X = self.X, gen_est = self._gen_est)
+            if mgc_magic != self.mgc_magic:
+                self.mgc_magic = mgc_magic
+                self._check_params()
+            if mgc_magic == 0:
+                return self.Y_random
+            else:
+                self._mgc_kernel = self.construct_mgc(X=self.X,Y=self.Y_random,sparsity=self.sparsity_estimate,
+                    mgc_sigma=self.mgc_sigma, mgc_k=self.mgc_k,mgc_decay=self.mgc_decay, mgc_scale=self.mgc_scale)
+                Y = self.apply_mgc(kernel = self.mgc_kernel, t=mgc_magic)
+                self._Y = Y
+        return Y
+    def fit_transform(self, X, sparsity_idx=None, precomputed=None, refit=True, mgc_magic=1):
+        self = self.fit(X, sparsity_idx=None, precomputed=None, refit=True)
+        self._Y = self.transform(mgc_magic=mgc_magic)
+        return self.Y
