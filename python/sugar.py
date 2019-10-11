@@ -540,7 +540,6 @@ class SUGAR(BaseEstimator):
         diffusion_operator = diffusion_degrees@kernel;
         for _ in range(t):
             Y = diffusion_operator@Y
-            print('magic')
         if rescale:
                 Y = (Y) * (np.percentile(self.X,95)/np.percentile(Y,95));
 
