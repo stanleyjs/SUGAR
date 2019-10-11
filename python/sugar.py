@@ -197,8 +197,9 @@ class SUGAR(BaseEstimator):
                        mgc_k=self.mgc_k, mgc_decay=self.mgc_decay,
                        mgc_scale=self.mgc_scale)
         check_int(noise_k=self.noise_k, degree_k=self.degree_k,
-                  mgc_k=self.mgc_k, M=self.M)
-        check_nonnegative(M=self.M, mgc_magic=self.mgc_magic)
+                  mgc_k=self.mgc_k)
+        check_if_not(None, [check_int,check_nonnegative],self.M)
+        check_nonnegative( mgc_magic=self.mgc_magic)
         check_in(['std', 'knn', 'minmax', 'median', None,
                   numbers.Number, types.FunctionType,
                   types.BuiltinFunctionType, functools.partial],
